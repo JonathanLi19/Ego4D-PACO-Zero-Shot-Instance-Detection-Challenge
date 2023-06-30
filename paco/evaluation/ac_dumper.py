@@ -109,6 +109,8 @@ class ACDumper(DatasetEvaluator):
         # separate predictictions into objects and parts
         is_obj = torch.zeros(len(instances), dtype=bool, device=device)
         for _i, cat_id in enumerate(instances.pred_classes):
+            # print(_i)
+            # print(cat_id)
             if cat_id.item() < len(self.obj_name_to_id):
                 is_obj[_i] = True
 

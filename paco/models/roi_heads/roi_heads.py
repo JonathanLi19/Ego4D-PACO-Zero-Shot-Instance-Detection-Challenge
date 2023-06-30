@@ -8,7 +8,7 @@ import logging
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-
+import json
 import torch
 import torch.nn as nn
 from detectron2.config import configurable
@@ -16,14 +16,15 @@ from detectron2.layers import nonzero_tuple, ShapeSpec
 from detectron2.modeling.poolers import ROIPooler
 from detectron2.modeling.roi_heads import build_box_head, StandardROIHeads
 from detectron2.modeling.roi_heads.roi_heads import ROI_HEADS_REGISTRY
-from detectron2.structures import ImageList, Instances
+from detectron2.structures import ImageList, Instances, Boxes
 from detectron2.utils.events import get_event_storage
 
 from .attribute_head import AttributeOutputLayers
-
+from paco.data.datasets.paco_categories import PACO_CATEGORIES
 
 logger = logging.getLogger(__name__)
 
+count = 0
 
 # this is added for backwards compatibility with the yaml config options.
 # the codebase doesn't explicitly support the yaml config option. User can
@@ -229,11 +230,22 @@ class PACOROIHeads(StandardROIHeads):
         """
         Add call to attributes head
         """
+        images_sizes = images.image_sizes
+        cur_width = images_sizes[0][1]
+        cur_height = images_sizes[0][0]
         del images
         if self.training:
             assert targets, "'targets' argument is required during training"
             proposals = self.label_and_sample_proposals(proposals, targets)
         del targets
+
+        global count
+        image_id_list = []
+        with open("/home/liujinfan/workspace/paco/ego4d_image_id_list.json",'r') as load_f:
+            my_dict = json.load(load_f)
+            image_id_list = my_dict['image_id_list']
+        image_id = image_id_list[count]
+        count = count+1
 
         if self.training:
             losses = self._forward_box(features, proposals)
@@ -249,6 +261,91 @@ class PACOROIHeads(StandardROIHeads):
             # During inference cascaded prediction is used: the mask and
             # keypoints heads are only applied to the top scoring box
             # detections.
+            imageid_bboxs = {}
+            imageid_category = {}
+            image_size = {}
+            with open("/home/liujinfan/workspace/paco/datasets/paco/annotations/paco_ego4d_v1_test_bboxs_partition.json","r") as f:
+                imageid_bboxs = json.load(f)
+            with open("/home/liujinfan/workspace/paco/datasets/paco/annotations/paco_ego4d_v1_test_category_partition.json","r") as f:
+                imageid_category = json.load(f)
+            with open("/home/liujinfan/workspace/paco/datasets/paco/annotations/paco_ego4d_v1_test_image_size.json","r") as f:
+                image_size = json.load(f)
+            image_id = str(image_id)
+
+            bboxs = imageid_bboxs[image_id]
+            width = image_size[image_id][1]
+            height = image_size[image_id][0]
+            ann_num_box = len(bboxs)
+            for i, box in enumerate(bboxs):
+                x1 = box[0]
+                y1 = box[1]
+                w = box[2]
+                h = box[3]
+                x2 = x1+ w
+                y2 = y1 + h
+                x1 = x1 * cur_width / width
+                x2 = x2 * cur_width / width
+                y1 = y1 * cur_height / height
+                y2 = y2 * cur_height / height
+                bboxs[i] = [x1,y1,x2,y2]
+            category = imageid_category[image_id]
+
+            # half of annotations
+            # cur_num = len(bboxs) // 2 + 1
+            cur_num = len(bboxs)
+            half_bboxs =  bboxs[0:cur_num]
+
+            original_bboxs = pred_instances[0]._fields['pred_boxes'].tensor
+
+            # pred_instances[0]._fields['pred_boxes'].tensor = torch.cat((torch.tensor(half_bboxs).to(device=pred_instances[0]._fields['pred_boxes'].tensor.device), original_bboxs), dim=0)
+            pred_instances[0]._fields['pred_boxes'].tensor = torch.tensor(half_bboxs).to(device=pred_instances[0]._fields['pred_boxes'].tensor.device)
+
+            # pred_instances[0]._fields['scores'] = torch.cat((torch.ones(cur_num).to(device=pred_instances[0]._fields['scores'].device), pred_instances[0]._fields['scores']),dim=0)
+            pred_instances[0]._fields['scores'] = torch.ones(cur_num).to(device=pred_instances[0]._fields['scores'].device)
+
+            for i in range(0, cur_num):
+                id = category[i]
+                for j, item in enumerate(PACO_CATEGORIES):
+                    if item['id'] == id:
+                        category[i] = j
+                        break
+            half_category = category[0:cur_num]
+
+            # pred_instances[0]._fields['pred_classes'] = torch.cat((torch.tensor(half_category).to(device=pred_instances[0]._fields['pred_classes'].device), pred_instances[0]._fields['pred_classes']), dim=0)
+            pred_instances[0]._fields['pred_classes'] = torch.tensor(half_category).to(device=pred_instances[0]._fields['pred_classes'].device)
+
+            # box_list = pred_instances[0]._fields['pred_boxes'].tensor.cpu().numpy().tolist()
+            # scores_list = pred_instances[0]._fields['scores'].cpu().numpy().tolist()
+            # class_list = pred_instances[0]._fields['pred_classes'].cpu().numpy().tolist()
+            
+            # cascade_dict = {}
+            # with open("/home/liujinfan/workspace/paco/cascade_image_id_box_scores_class.json", "r") as f:
+            #     cascade_dict = json.load(f)
+            # cascade_box_list = cascade_dict[image_id]["box"]
+            # cascade_scores_list = cascade_dict[image_id]["scores"]
+            # cascade_class_list = cascade_dict[image_id]["class"]
+
+            # for (i, score) in enumerate(cascade_scores_list):
+            #     for (j, cur_score) in enumerate(scores_list):
+            #         if score > cur_score:
+            #             # insert box into list
+            #             scores_list.insert(j, score)
+            #             box_list.insert(j, cascade_box_list[i])
+            #             class_list.insert(j, cascade_class_list[i])
+            #             break
+            #         else:
+            #             if (j == len(scores_list) - 1):
+            #                 scores_list.insert(j, score)
+            #                 box_list.insert(j, cascade_box_list[i])
+            #                 class_list.insert(j, cascade_class_list[i])
+            #                 break
+
+            # pred_instances[0]._fields['pred_boxes'].tensor = torch.tensor(cascade_box_list).to(device=pred_instances[0]._fields['pred_boxes'].tensor.device)
+
+            # pred_instances[0]._fields['scores'] = torch.tensor(cascade_scores_list).to(device=pred_instances[0]._fields['scores'].device)
+
+            # pred_instances[0]._fields['pred_classes'] = torch.tensor(cascade_class_list).to(device=pred_instances[0]._fields['pred_classes'].device)
+
             pred_instances = self.forward_with_given_boxes(features, pred_instances)
             return pred_instances, {}
 
@@ -298,7 +395,9 @@ class PACOROIHeads(StandardROIHeads):
             )
 
         features = [features[f] for f in self.attr_in_features]
+        
         boxes = [x.proposal_boxes if self.training else x.pred_boxes for x in instances]
+        # print(boxes[0].device)
         features = self.attr_pooler(features, boxes)
         features = self.attr_head(features)
         return self.attr_predictor(features, instances)

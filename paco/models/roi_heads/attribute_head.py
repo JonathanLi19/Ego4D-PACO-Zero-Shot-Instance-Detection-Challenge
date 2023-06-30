@@ -166,7 +166,9 @@ class AttributeOutputLayers(nn.Module):
         return attr_values
 
     def forward(self, x, instances: List[Instances]):
+        # print(x[0].shape) #(n,1024)
         x = self.layers(x)
+        # print(x[0].shape) #(4,n,class) class:30+11+14+4
         if self.training:
             return {
                 "loss_attribute": attribute_loss(

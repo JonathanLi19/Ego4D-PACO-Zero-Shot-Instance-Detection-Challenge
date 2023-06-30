@@ -50,7 +50,7 @@ if __name__ == "__main__":
 
     # Load the dataset.
     print("Loading the dataset...")
-    with open(dataset_file_name) as f:
+    with open(args.dataset_file_name) as f:
         dataset = json.load(f)
     print(len(dataset["annotations"]))
 
@@ -63,9 +63,10 @@ if __name__ == "__main__":
         predictions = np.load(args.predictions_file_name, allow_pickle=True)
     else:
         raise ValueError(f"Unsupported input file format {ext}, only .pth or .npy are supported.")
-
+    print(len(predictions))
     # Instantiate the evaluator.
     qeval = PACOQueryPredictionEvaluator(dataset, predictions)
 
     # Run the eval loop which will print the results.
-    qeval.evaluation_loop(deduplicate_boxes=args.deduplicate_boxes, print_results=True)
+    # qeval.evaluation_loop(deduplicate_boxes=args.deduplicate_boxes, print_results=True)
+    qeval.evaluation_loop(deduplicate_boxes=False, print_results=True)

@@ -1,6 +1,7 @@
 # output dir
 output
 outputs
+output_test
 **lightning_logs/**
 tools/multirun/*
 tools/outputs/*
@@ -46,3 +47,6 @@ model_ts*.txt
 .idea
 .vscode
 _darcs
+
+# dataset
+datasets

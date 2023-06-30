@@ -511,11 +511,11 @@ class PACOQueryPredictionEvaluator:
         """
         # Check consistency.
         assert "queries" in dataset, "Invalid dataset, missing queries field."
-        for prediction in predictions:
-            if set(prediction.keys()) != {"image_id", "bboxes", "scores"} and set(
-                prediction.keys()
-            ) != {"image_id", "bboxes", "box_scores", "pred_classes"}:
-                raise ValueError("Invalid predictions dump format.")
+        # for prediction in predictions:
+            # if set(prediction.keys()) != {"image_id", "bboxes", "scores"} and set(
+            #     prediction.keys()
+            # ) != {"image_id", "bboxes", "box_scores", "pred_classes"}:
+            #     raise ValueError("Invalid predictions dump format.")
         # Instantiate query eval API.
         self.eval_api = PACOQueryEvalAPI(dataset["queries"])
         # Extract maps from dataset and predictions.
@@ -552,6 +552,7 @@ class PACOQueryPredictionEvaluator:
                 deduplicate_boxes,
                 self.eval_api.num_queries,
             )
+            # print(det_scores.shape)
             gt_bbox_pos_query_ids = self.im_id_to_gt_bbox_pos_query_ids[im_id]
             gt_bbox_neg_query_ids = self.im_id_to_gt_bbox_neg_query_ids[im_id]
             neg_im_gt_query_ids = self.im_id_to_neg_im_gt_query_ids[im_id]
@@ -563,6 +564,21 @@ class PACOQueryPredictionEvaluator:
                 gt_bbox_neg_query_ids,
                 neg_im_gt_query_ids,
             )
+                
+        if 1==1:
+            # Gather accumulated scores.
+            comm.synchronize()
+            query_pos_scores = comm.gather(self.eval_api.query_pos_scores, dst=0)
+            query_neg_scores = comm.gather(self.eval_api.query_neg_scores, dst=0)
+
+            if not comm.is_main_process():
+                return {}
+
+            # Aggregate accumulated scores in the main process.
+            self.eval_api.aggregate_and_set_query_scores(
+                query_pos_scores, query_neg_scores
+            )
+            print("done")
         self.eval_api.evaluate()
         if print_results:
             self.eval_api.print_results()
@@ -616,8 +632,16 @@ class PACOQueryPredictionEvaluator:
             # Build the NxM score array, N being the number of unique boxes.
             box_scores = self._to_numpy(prediction["box_scores"])
             pred_classes = self._to_numpy(prediction["pred_classes"])
-            scores = np.zeros_like(box_scores, shape=(len(unique_bboxes), num_queries))
-            scores[bbox_ids, pred_classes] = box_scores
+            # scores = np.zeros_like(box_scores, shape=(len(unique_bboxes), num_queries))
+            
+            # print(scores.shape)
+            # print(pred_classes.shape)
+            # print(box_scores.shape)
+            # print(bbox_ids)
+            # pred_classes = np.transpose(pred_classes)
+            # box_scores = np.transpose(box_scores)
+            # scores[bbox_ids, pred_classes] = box_scores
+            scores = self._to_numpy(prediction["det_scores"])
             det_bboxes = unique_bboxes
             det_scores = scores
         else:
@@ -660,6 +684,9 @@ class PACOQueryEvaluator(ACDumper):
         # Construct query features.
         self.query_features = self._construct_query_features(dataset)
 
+        # get numpy result
+        self.pre_result=[]
+
     def process(self, inputs: Dict[str, Any], outputs: Dict[str, Any]) -> None:
         """
         Processes prediction outputs for one image and accumulates positive/negative
@@ -671,14 +698,25 @@ class PACOQueryEvaluator(ACDumper):
             outputs:    The outputs of an LVIS model. It is a list of dicts with key
                         "instances" that contains :class:`Instances`.
         """
+        image_id_list = []
+        my_dict = {}
+        with open("/home/liujinfan/workspace/paco/ego4d_image_id_list.json",'r') as load_f:
+            my_dict = json.load(load_f)
+            image_id_list = my_dict['image_id_list']
         for input, output in zip(inputs, outputs):
             if "instances" in output:
+
                 im_id = input["image_id"]
                 instances = output["instances"]
-
+                # print(instances)
+                # print(instances)
+                # print((instances.attribute_probs).shape)
+                #instances: Boxes scores pred_class pred_mask=false attribute_probs
                 # Extract atomic construct features.
                 ac = self.process_instances(im_id, instances)
-
+                # print(ac["features"].shape)
+                
+                #ac:image_id bboxs features(box_n,12590)
                 # Convert features to query scores.
                 if ac["features"].numel() == 0:
                     det_scores = np.empty((0, self.query_features.shape[0]))
@@ -695,9 +733,27 @@ class PACOQueryEvaluator(ACDumper):
                         .cpu()
                         .numpy()
                     )
-
-                # Accumulate scores for the current image.
+                # # Accumulate scores for the current image.
                 det_bboxes = ac["bboxes"].detach().cpu().numpy()
+                # print(det_scores)
+                # np.save("/home/liujinfan/workspace/paco/detscores.npy",det_scores)
+                # boxscore = np.max(det_scores,axis=1)
+                # print(det_bboxes.shape)
+                #det_box(box_n,4)
+                # print(det_scores.shape)
+                # #det_scores(box_scores,4345)
+                # pre_class = np.argmax(det_scores,axis=1)
+                # print(pre_class)
+
+                # get pre result dict
+                pre_class = np.tile(np.arange(0,4345),(det_scores.shape[0],1))
+                image_pre_result={}
+                image_pre_result["image_id"] = im_id
+                image_pre_result["bboxes"] = det_bboxes
+                image_pre_result["scores"] = det_scores
+                self.pre_result.append(image_pre_result)
+                # print(len(self.pre_result))
+
                 gt_bboxes = self.im_id_to_gt_bboxes[im_id]
                 gt_bbox_pos_query_ids = self.im_id_to_gt_bbox_pos_query_ids[im_id]
                 gt_bbox_neg_query_ids = self.im_id_to_gt_bbox_neg_query_ids[im_id]
@@ -710,11 +766,19 @@ class PACOQueryEvaluator(ACDumper):
                     gt_bbox_neg_query_ids,
                     neg_im_gt_query_ids,
                 )
+        my_dict['image_id_list'] = image_id_list
+        with open("/home/liujinfan/workspace/paco/image_id_list.json","w") as f:
+            json.dump(my_dict,f)
+                
+                
+
 
     def evaluate(self) -> None:
         """
         Processes accumulated scores and produces AR@k results.
         """
+        print('len:', len(self.pre_result))
+        np.save("/home/liujinfan/workspace/paco/result_vit_l_ann_all.npy",self.pre_result)
         if self._distributed:
             # Gather accumulated scores.
             comm.synchronize()
@@ -796,5 +860,6 @@ class PACOQueryEvaluator(ACDumper):
 
         # Concatenate all feature vectors.
         query_features = torch.cat(query_features)
+        # print(query_features.shape)
 
         return query_features

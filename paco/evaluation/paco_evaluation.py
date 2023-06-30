@@ -35,6 +35,7 @@ class PACOEvaluator(LVISEvaluator):
         tasks=("segm", "bbox"),
         distributed=True,
         output_dir=None,
+        # eval_attributes=False,
         eval_attributes=False,
         attr_ap_type="usual",
         *,

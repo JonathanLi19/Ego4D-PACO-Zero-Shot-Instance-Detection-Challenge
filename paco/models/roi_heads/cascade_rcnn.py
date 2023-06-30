@@ -25,7 +25,9 @@ from torch import nn
 from torch.autograd.function import Function
 
 from .roi_heads import PACOROIHeads
-
+import json
+count = 0
+mydict = {}
 """
 This file borrows from
 https://github.com/facebookresearch/detectron2/blob/main/detectron2/modeling/roi_heads/cascade_rcnn.py
@@ -161,6 +163,13 @@ class PACOCascadeROIHeads(PACOROIHeads):
 
     def forward(self, images, features, proposals, targets=None):
         del images
+        global count
+        image_id_list = []
+        with open("/home/liujinfan/workspace/paco/ego4d_image_id_list.json",'r') as load_f:
+            my_dict = json.load(load_f)
+            image_id_list = my_dict['image_id_list']
+        image_id = image_id_list[count]
+        count = count+1
         if self.training:
             proposals = self.label_and_sample_proposals(proposals, targets)
 
@@ -175,6 +184,25 @@ class PACOCascadeROIHeads(PACOROIHeads):
 
         else:
             pred_instances = self._forward_box(features, proposals)
+            image_id = str(image_id)
+            box_list = pred_instances[0]._fields['pred_boxes'].tensor.cpu().numpy().tolist()
+            scores_list = pred_instances[0]._fields['scores'].cpu().numpy().tolist()
+            class_list = pred_instances[0]._fields['pred_classes'].cpu().numpy().tolist()
+
+
+            global mydict
+            mydict[image_id] = {}
+            mydict[image_id]["box"] = box_list
+            mydict[image_id]["scores"] = scores_list
+            mydict[image_id]["class"] = class_list
+            if image_id == "26451":
+                with open("/home/liujinfan/workspace/paco/cascade_image_id_box_scores_class.json", "w") as f:
+                    json.dump(mydict, f)
+                print("OK!!!")
+            else:
+                print("image_id:", image_id)
+                print("len of dict:", len(mydict))
+            
             pred_instances = self.forward_with_given_boxes(features, pred_instances)
             return pred_instances, {}
 
